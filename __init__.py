@@ -6,9 +6,12 @@ from binaryninja import (BackgroundTaskThread, BinaryView, MessageBoxButtonSet, 
                          get_open_filename_input, log_error, show_message_box)
 
 
-def _error(message:str):
+_METADATA_KEY = "goresym.import.v1"
+
+
+def _error(message:str, title:str = "GoReSym Import Failed"):
   log_error(f"GoReSym: {message}")
-  show_message_box("GoReSym Import Failed", message, MessageBoxButtonSet.OKButtonSet, MessageBoxIcon.ErrorIcon)
+  show_message_box(title, message, MessageBoxButtonSet.OKButtonSet, MessageBoxIcon.ErrorIcon)
 
 
 class _ImportTask(BackgroundTaskThread):
@@ -20,22 +23,42 @@ class _ImportTask(BackgroundTaskThread):
     try:
       from .importer import apply_metadata, load_metadata
       metadata = load_metadata(self.path)
-      self.progress = "GoReSym: applying functions and strings"
-      apply_metadata(self.bv, metadata)
+      apply_metadata(self.bv, metadata, lambda stage:setattr(self, "progress", f"GoReSym: {stage}"))
       self.progress = "GoReSym: import complete"
-    except Exception as e: execute_on_main_thread(lambda message=str(e): _error(message))
+    except Exception as error:
+      execute_on_main_thread(lambda message=str(error): _error(message))
 
 
 def import_goresym(bv:BinaryView):
-  if (path:=get_open_filename_input("Select GoReSym JSON output", "GoReSym JSON (*.json);;All Files (*)")) is None: return
+  path = get_open_filename_input("Select GoReSym JSON output", "GoReSym JSON (*.json);;All Files (*)")
+  if path is None: return
   task = _ImportTask(bv, path)
   task.start()
   return task
 
 
+def _stored_metadata(bv:BinaryView):
+  try:
+    return bv.query_metadata(_METADATA_KEY)
+  except KeyError:
+    return None
+
+
+def show_imported_metadata(bv:BinaryView):
+  from .importer import format_imported_metadata
+  if not isinstance(state:=_stored_metadata(bv), dict):
+    _error("No imported GoReSym metadata is stored in this Binary View", "GoReSym Metadata Unavailable")
+    return
+  bv.show_plain_text_report("GoReSym Import Metadata", format_imported_metadata(state))
+
+
 def _valid(bv:BinaryView) -> bool: return bv.arch is not None and any(segment.executable for segment in bv.segments)
 
 
-PluginCommand.register(r"GoReSym\Import JSON", r"GoReSym\Import JSON", import_goresym, _valid)
+def _has_metadata(bv:BinaryView) -> bool: return isinstance(_stored_metadata(bv), dict)
 
-__all__ = ["import_goresym"]
+
+PluginCommand.register(r"GoReSym\Import JSON", r"GoReSym\Import JSON", import_goresym, _valid)
+PluginCommand.register(r"GoReSym\Show Imported Metadata", r"GoReSym\Show Imported Metadata", show_imported_metadata, _has_metadata)
+
+__all__ = ["import_goresym", "show_imported_metadata"]

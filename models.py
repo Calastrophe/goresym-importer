@@ -9,7 +9,8 @@ UInt32 = Annotated[int, Field(ge=0, le=(1 << 32)-1)]
 UInt64 = Annotated[int, Field(ge=0, le=(1 << 64)-1)]
 
 
-class GoReSymModel(BaseModel): model_config = ConfigDict(populate_by_name=True, extra="ignore")
+class GoReSymModel(BaseModel):
+  model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
 
 class PcLnTabMetadata(GoReSymModel):
@@ -20,11 +21,33 @@ class PcLnTabMetadata(GoReSymModel):
   cpu_quantum_str:str = Field(alias="CpuQuantumStr")
   pointer_size:UInt32 = Field(alias="PointerSize")
 
+  @field_validator("endianess")
+  @classmethod
+  def valid_endianess(cls, value:str) -> str:
+    if value not in {"LittleEndian", "BigEndian"}:
+      raise ValueError("must be LittleEndian or BigEndian")
+    return value
+
+  @field_validator("pointer_size")
+  @classmethod
+  def valid_pointer_size(cls, value:int) -> int:
+    if value not in {4, 8}:
+      raise ValueError("must be 4 or 8")
+    return value
+
 
 class GoSlice(GoReSymModel):
   data:UInt64 = Field(0, alias="Data")
   length:UInt64 = Field(0, alias="Len")
   capacity:UInt64 = Field(0, alias="Capacity")
+
+  @model_validator(mode="after")
+  def valid_slice(self):
+    if self.capacity and self.length > self.capacity:
+      raise ValueError("Len must not exceed a declared Capacity")
+    if (self.length or self.capacity) and not self.data:
+      raise ValueError("Data must be non-zero for a non-empty slice")
+    return self
 
 
 class ModuleData(GoReSymModel):
@@ -39,6 +62,12 @@ class ModuleData(GoReSymModel):
   @field_validator("typelinks", "itablinks", "legacy_types", mode="before")
   @classmethod
   def null_slice(cls, value): return {} if value is None else value
+
+  @model_validator(mode="after")
+  def valid_types_range(self):
+    if self.types and self.etypes and self.etypes < self.types:
+      raise ValueError("ETypes must not precede Types")
+    return self
 
 
 class RecoveredType(GoReSymModel):
@@ -78,7 +107,8 @@ class FunctionMetadata(GoReSymModel):
 
   @model_validator(mode="after")
   def valid_range(self):
-    if self.end <= self.start: raise ValueError("End must be greater than Start")
+    if self.end <= self.start:
+      raise ValueError("End must be greater than Start")
     return self
 
 
@@ -103,12 +133,16 @@ class GoReSymMetadata(GoReSymModel):
   strings:list[StringEntry]|None = Field(alias="Strings")
 
 
-class GoReSymError(GoReSymModel): error:str
+class GoReSymError(GoReSymModel):
+  error:str
 
 
 GoReSymOutput = GoReSymMetadata|GoReSymError
 _output = TypeAdapter[GoReSymOutput](GoReSymOutput)
-def parse_goresym_json(data:str|bytes|bytearray) -> GoReSymOutput: return _output.validate_json(data)
+
+
+def parse_goresym_json(data:str|bytes|bytearray) -> GoReSymOutput:
+  return _output.validate_json(data)
 
 
 __all__ = ["BuildInfo", "BuildModule", "BuildSetting", "FunctionMetadata", "GoReSymError", "GoReSymMetadata", "GoSlice", "ModuleData",
